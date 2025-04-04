@@ -1,9 +1,18 @@
+#Battery < 0 == stop vehicle.
+#Instead of battery lesser than threshold function, calculate the distance from all battery stations, make sure battery doesnt run out. Theliva yosichitu poderen. Olaruren.
+
 import heapq
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import CubicSpline
 import time
 import random
+
+BATTERY_THRESHOLD = 20  # in percentage
+INITIAL_BATTERY = 100  # 100% battery
+ENERGY_CAPACITY = 100000  # Total energy capacity in Joules
+charging_station = (0, 39)  # Example fixed charging station position
+
 
 # Energy Constants
 P_DRIVE = 37.90  # W
@@ -17,9 +26,9 @@ T_LOAD = 8.67  # s
 CARBON_INTENSITY = 0.8  # kg CO2 per kWh (India's average grid intensity)
 
 # Energy-Optimized A* Algorithm (Using Smooth A*)
-def astar_energy_optimized(grid, start, goal):
+def astar_energy_optimized(grid, start, goal, battery_level):
     def heuristic(a, b):
-        return max(abs(a[0] - b[0]), abs(a[1] - b[1])) * 5.2
+        return max(abs(a[0] - b[0]), abs(a[1] - b[1])) * 5.2  # Diagonal heuristic for 8 directions
 
     def neighbors(node):
         x, y = node
@@ -29,39 +38,46 @@ def astar_energy_optimized(grid, start, goal):
             if 0 <= nx < len(grid) and 0 <= ny < len(grid[0]) and grid[nx][ny] == 0:
                 yield (nx, ny), dx, dy
 
+    # If battery < threshold, redirect to charging station
+    target = charging_station if battery_level < BATTERY_THRESHOLD else goal
+
     open_list = []
-    heapq.heappush(open_list, (0 + heuristic(start, goal), 0, start, (0, 0)))
+    heapq.heappush(open_list, (0 + heuristic(start, target), 0, start, (0, 0), battery_level))
     came_from = {}
     g_score = {start: 0}
-    f_score = {start: heuristic(start, goal)}
+    f_score = {start: heuristic(start, target)}
 
     while open_list:
-        _, current_g, current, last_direction = heapq.heappop(open_list)
+        _, current_g, current, last_dir, battery_level = heapq.heappop(open_list)
 
-        if current == goal:
+        if current == target:
             path = []
             while current in came_from:
                 path.append(current)
                 current = came_from[current]
             path.append(start)
-            return path[::-1]
+            return path[::-1], battery_level
 
         for neighbor, dx, dy in neighbors(current):
             move_cost = P_DRIVE
-
-            # Penalize unnecessary turns
-            if (dx, dy) != last_direction:
-                move_cost += P_CONTROL  # Add turn penalty
+            # Penalize unnecessary turns (Energy for control)
+            if (dx, dy) != last_dir:
+                move_cost += P_CONTROL
+            # Acceleration penalty for sharp direction change
+            if dx != last_dir[0] or dy != last_dir[1]:
+                move_cost += 0.2 * P_DRIVE  # Simulate energy loss
 
             tentative_g = current_g + move_cost
+            battery_used = move_cost * T_DRIVE
+            remaining_battery = battery_level - (battery_used / ENERGY_CAPACITY * 100)
 
             if neighbor not in g_score or tentative_g < g_score[neighbor]:
                 came_from[neighbor] = current
                 g_score[neighbor] = tentative_g
-                f_score[neighbor] = tentative_g + heuristic(neighbor, goal)
-                heapq.heappush(open_list, (f_score[neighbor], tentative_g, neighbor, (dx, dy)))
+                f_score[neighbor] = tentative_g + heuristic(neighbor, target)
+                heapq.heappush(open_list, (f_score[neighbor], tentative_g, neighbor, (dx, dy), remaining_battery))
 
-    return []
+    return [], battery_level
 
 # Traditional A* Algorithm (Basic A*)
 def astar_traditional(grid, start, goal):
@@ -180,7 +196,7 @@ goal = (39, 39)
 grid = generate_grid(size, obstacle_percentage=0.3)
 
 # Run Energy-Optimized A* and Traditional A*
-path_energy = astar_energy_optimized(grid, start, goal)
+path_energy, battery_remaining = astar_energy_optimized(grid, start, goal, INITIAL_BATTERY)
 path_traditional = astar_traditional(grid, start, goal)
 
 # Smooth the Paths
@@ -224,5 +240,3 @@ plt.title('Energy Consumption Comparison (40x40 Grid with Scattered Obstacles)')
 plt.xlabel('Algorithm')
 plt.ylabel('Energy Consumed (Joules)')
 plt.show()
-
-
